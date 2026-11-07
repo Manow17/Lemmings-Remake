@@ -14,6 +14,8 @@ LM.snd = (function () {
     if (ctx) { if (ctx.state === 'suspended') ctx.resume(); return; }
     var AC = window.AudioContext || window.webkitAudioContext; if (!AC) return;
     ctx = new AC(); master = ctx.createGain(); master.gain.value = 0.5; master.connect(ctx.destination);
+    /* iOS/Safari only unlock audio from inside a gesture: play one silent sample */
+    try { var sb = ctx.createBuffer(1, 1, 22050), ss = ctx.createBufferSource(); ss.buffer = sb; ss.connect(ctx.destination); ss.start(0); } catch (e) { }
   }
   function tone(f, dur, type, vol, slideTo, delay) {
     if (!ctx) return; var t = ctx.currentTime + (delay || 0);

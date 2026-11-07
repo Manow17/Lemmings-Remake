@@ -139,7 +139,8 @@ LM.Game = function (lvl) {
   this.paused = false; this.nuked = false; this.nukeIdx = 0; this.nukeArm = 0;
   this.over = false; this.overT = 0; this.reason = '';
   this.entFrame = 0; this.scrollX = lvl.scroll || 0; this.rrHold = 0; this.rrT = 0;
-  this.mini = LM.mk(Math.ceil(W / 16), 20); this.miniDirty = true;
+  this.mini = LM.mk(1, 1); this.miniDirty = true; this.miniRect = null;
+  this.viewW = 320; this.flashL = null; this.flashT = 0;
   this.ff = false; this.stats = {};
 };
 
@@ -480,12 +481,13 @@ LM.Game.prototype = {
     LM.snd && LM.snd.play('assign');
     return true;
   },
-  pick: function (wx, wy) {
-    var best = null, bd = 1e9, bestOk = false, ST = LM.ST;
+  /* rad = extra forgiveness in world pixels (fat fingers); lemmings that can take the skill win ties */
+  pick: function (wx, wy, rad) {
+    var best = null, bd = 1e9, bestOk = false, ST = LM.ST, rx = Math.max(6, rad || 0), ry = Math.max(8, rad || 0);
     for (var i = 0; i < this.lems.length; i++) {
       var L = this.lems[i]; if (L.st >= ST.OHNO) continue;
       var dx = wx - L.x, dy = wy - (L.y - 5);
-      if (Math.abs(dx) > 6 || dy < -8 || dy > 8) continue;
+      if (Math.abs(dx) > rx || Math.abs(dy) > ry) continue;
       var ok = this.canAssign(L, this.sel), d = dx * dx + dy * dy;
       if ((ok && !bestOk) || (ok === bestOk && d < bd)) { best = L; bd = d; bestOk = ok; }
     }
@@ -508,8 +510,8 @@ LM.Game.prototype = {
     this.rate = Math.max(this.minRate, Math.min(99, r));
   },
   nuke: function () { if (this.nuked) return; this.nuked = true; this.nukeIdx = 0; LM.snd && LM.snd.play('ohno'); },
-  scrollBy: function (dx) { this.scrollX = Math.max(0, Math.min(this.W - LM.W, this.scrollX + dx)); },
-  scrollTo: function (x) { this.scrollX = Math.max(0, Math.min(this.W - LM.W, x)); },
+  scrollBy: function (dx) { this.scrollX = Math.max(0, Math.min(Math.max(0, this.W - this.viewW), this.scrollX + dx)); },
+  scrollTo: function (x) { this.scrollX = Math.max(0, Math.min(Math.max(0, this.W - this.viewW), x)); },
   outCount: function () { var c = 0; for (var i = 0; i < this.lems.length; i++) if (this.lems[i].st < LM.ST.SPLAT) c++; return c; },
   pct: function () { return Math.floor(this.saved * 100 / this.lvl.num); },
   result: function () {
@@ -520,8 +522,8 @@ LM.Game.prototype = {
   /* per-frame housekeeping (called every animation frame) */
   frame: function (input) {
     if (this.over) this.overT++;
-    this.updMini();
     if (this.nukeArm > 0) this.nukeArm--;
+    if (this.flashT > 0) this.flashT--;
     /* held release-rate buttons repeat */
     if (this.rrHold) { if (this.rrT === 0 || (this.rrT > 14 && this.rrT % 2 === 0)) this.setRate(this.rate + this.rrHold); this.rrT++; }
     var sp = input.fast ? 5 : 2.5;
@@ -529,32 +531,69 @@ LM.Game.prototype = {
     if (this.over) { this.updParts(); this.flush(); }
   },
 
-  updMini: function () {
-    if (!this.miniDirty) return; this.miniDirty = false;
-    var g = this.mini.getContext('2d'), mw = this.mini.width;
-    g.clearRect(0, 0, mw, 20);
-    for (var my = 0; my < 20; my++) for (var mx = 0; mx < mw; mx++) {
-      var any = 0;
-      for (var yy = 0; yy < 8 && !any; yy += 2) for (var xx = 0; xx < 16; xx += 3) if (this.T[(my * 8 + yy) * this.W + Math.min(this.W - 1, mx * 16 + xx)]) { any = 1; break; }
-      if (any) { g.fillStyle = (my > 0 && !this.T[Math.max(0, (my * 8 - 2)) * this.W + mx * 16 + 8]) ? '#58e058' : '#139013'; g.fillRect(mx, my, 1, 1); }
+  timeStr: function () {
+    var secs = Math.ceil(this.timeLeft / LM.TPS), mm = Math.floor(secs / 60), ss = secs % 60;
+    return mm + '-' + (ss < 10 ? '0' : '') + ss;
+  },
+  selText: function () { return this.sel.toUpperCase() + ' ' + this.skills[this.sel]; },
+  hoverText: function (L) { return L ? this.nameOf(L) + ' ' + this.countName(this.nameOf(L)) : ''; },
+
+  /* ---------- minimap ---------- */
+  miniBitmap: function (w, h) {
+    var m = this.mini;
+    if (!this.miniDirty && m.width === w && m.height === h) return m;
+    if (m.width !== w || m.height !== h) { m.width = w; m.height = h; }
+    this.miniDirty = false;
+    var g = m.getContext('2d'), W = this.W, T = this.T, bw = W / w, bh = 160 / h, sxs = Math.max(1, Math.floor(bw / 3)), sys = Math.max(1, Math.floor(bh / 2));
+    g.clearRect(0, 0, w, h);
+    for (var my = 0; my < h; my++) for (var mx = 0; mx < w; mx++) {
+      var x0 = Math.floor(mx * bw), y0 = Math.floor(my * bh), any = false;
+      for (var yy = 0; yy <= bh && !any; yy += sys) for (var xx = 0; xx <= bw; xx += sxs) {
+        var px = Math.min(W - 1, x0 + xx), py = Math.min(159, y0 + yy);
+        if (T[py * W + px]) { any = true; break; }
+      }
+      if (any) {
+        var uy = Math.max(0, y0 - 2);
+        g.fillStyle = T[uy * W + Math.min(W - 1, x0 + (bw >> 1))] ? '#139013' : '#58e058'; g.fillRect(mx, my, 1, 1);
+      }
     }
+    return m;
+  },
+  /* red scroll arrows + framed map, drawn into the box (x,y,w,h); remembers its geometry for hit-testing */
+  drawMiniWidget: function (ctx, x, y, w, h) {
+    var aw = 10, cy = y + h / 2, ah = Math.max(3, Math.min(7, h / 2 - 1)), i;
+    ctx.fillStyle = '#c0383c';
+    ctx.beginPath(); ctx.moveTo(x + 1, cy); ctx.lineTo(x + 9, cy - ah); ctx.lineTo(x + 9, cy + ah); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(x + w - 1, cy); ctx.lineTo(x + w - 9, cy - ah); ctx.lineTo(x + w - 9, cy + ah); ctx.fill();
+    var fx = x + aw + 2, fw = w - 2 * aw - 4;
+    ctx.fillStyle = '#7a3c30'; ctx.fillRect(fx, y, fw, h);
+    ctx.fillStyle = '#050508'; ctx.fillRect(fx + 1, y + 1, fw - 2, h - 2);
+    var mx = fx + 1, my = y + 1, mw = fw - 2, mh = h - 2;
+    ctx.drawImage(this.miniBitmap(mw, mh), mx, my);
+    var sx = mw / this.W, sy = mh / 160;
+    ctx.fillStyle = '#f0f8f0';
+    for (i = 0; i < this.lems.length; i++) {
+      var Lm = this.lems[i]; if (Lm.st >= LM.ST.SPLAT) continue;
+      ctx.fillRect(mx + Math.floor(Lm.x * sx), my + Math.min(mh - 1, Math.floor(Lm.y * sy)), 1, 1);
+    }
+    ctx.strokeStyle = '#a8f8a8'; ctx.lineWidth = 1;
+    var vx = Math.round(mx + this.scrollX * sx), vw = Math.max(3, Math.min(mw, Math.round(this.viewW * sx)));
+    ctx.strokeRect(vx + 0.5, my + 0.5, vw - 1, mh - 1);
+    return (this.miniRect = { x: mx, y: my, w: mw, h: mh, wx: x, ww: w, aw: aw });
   },
 
   /* ---------- drawing ---------- */
-  draw: function (ctx, mouse) {
+  drawWorld: function (ctx, viewW) {
     var sx = Math.round(this.scrollX), t = this.t, ST = LM.ST, i, L;
-    ctx.fillStyle = LM.BG; ctx.fillRect(0, 0, LM.W, 160);
-    ctx.drawImage(this.tcv, sx, 0, LM.W, 160, 0, 0, LM.W, 160);
-    /* exit */
+    ctx.fillStyle = LM.BG; ctx.fillRect(0, 0, viewW, 160);
+    var sw = Math.min(viewW, this.W - sx);
+    if (sw > 0) ctx.drawImage(this.tcv, sx, 0, sw, 160, 0, 0, sw, 160);
     ctx.drawImage(LM.OBJ.exit[this.style][(t >> 2) & 3], this.exit.x - 16 - sx, this.exit.y - 25);
-    /* entrance */
     ctx.drawImage(LM.OBJ.entrance[this.entFrame], this.ent.x - 20 - sx, this.ent.y);
-    /* fire traps */
     for (i = 0; i < this.traps.length; i++) ctx.drawImage(LM.OBJ.fire[(t >> 1) & 3], this.traps[i].x - sx, this.traps[i].y);
-    /* lemmings */
     for (i = 0; i < this.lems.length; i++) {
       L = this.lems[i]; var x = L.x - sx;
-      if (x < -20 || x > LM.W + 20) continue;
+      if (x < -20 || x > viewW + 20) continue;
       var nm, fr;
       switch (L.st) {
         case ST.WALK: nm = 'walk'; fr = L.f; break; case ST.FALL: nm = 'fall'; fr = L.f >> 1; break;
@@ -573,17 +612,17 @@ LM.Game.prototype = {
         LM.drawDigits(ctx, n, x - 1, L.y - 19, '#000', 1); LM.drawDigits(ctx, n, x - 2, L.y - 20, '#fff', 1);
       }
     }
-    /* water on top so drowning lemmings sink behind it */
-    for (i = 0; i < this.waters.length; i++) this.drawWater(ctx, this.waters[i], sx);
-    /* particles */
+    for (i = 0; i < this.waters.length; i++) this.drawWater(ctx, this.waters[i], sx, viewW);
     for (i = 0; i < this.parts.length; i++) {
       var p = this.parts[i]; ctx.fillStyle = p.c; ctx.fillRect(Math.round(p.x - sx), Math.round(p.y), 1, 1);
     }
-    this.drawPanel(ctx, mouse);
+    /* brief bracket around the lemming that just received a skill (touch feedback) */
+    if (this.flashT > 0 && this.flashL && this.flashL.st < ST.DEAD && (this.flashT & 2) === 0)
+      ctx.drawImage(LM.curBox, Math.round(this.flashL.x - sx) - 7, Math.round(this.flashL.y - 5) - 7);
   },
 
-  drawWater: function (ctx, w, sx) {
-    var x0 = Math.max(w.x, sx), x1 = Math.min(w.x + w.w, sx + LM.W), t = this.t;
+  drawWater: function (ctx, w, sx, viewW) {
+    var x0 = Math.max(w.x, sx), x1 = Math.min(w.x + w.w, sx + viewW), t = this.t;
     if (x1 <= x0) return;
     ctx.fillStyle = '#1830c0'; ctx.fillRect(x0 - sx, w.y + 2, x1 - x0, w.h - 2);
     ctx.fillStyle = '#2c58e8'; ctx.fillRect(x0 - sx, w.y + 4, x1 - x0, 2);
@@ -594,55 +633,51 @@ LM.Game.prototype = {
     }
   },
 
-  drawPanel: function (ctx, mouse) {
-    var ST = LM.ST, hud = LM.fonts.hud, i, x;
-    ctx.fillStyle = '#000'; ctx.fillRect(0, 160, LM.W, 40);
-    /* info row */
-    var hov = mouse && mouse.inView ? this.pick(mouse.x + Math.round(this.scrollX), mouse.y) : null;
-    var txt = '';
-    if (hov) txt = this.nameOf(hov) + ' ' + this.countName(this.nameOf(hov));
-    LM.drawText(ctx, hud, txt, 0, 161);
-    LM.drawText(ctx, hud, 'OUT ' + this.outCount(), 112, 161);
-    LM.drawText(ctx, hud, 'IN ' + (this.pct() < 10 ? '0' : '') + this.pct() + '%', 184, 161);
-    var secs = Math.ceil(this.timeLeft / LM.TPS), mm = Math.floor(secs / 60), ss = secs % 60;
-    LM.drawText(ctx, hud, 'TIME ' + mm + '-' + (ss < 10 ? '0' : '') + ss, 248, 161);
-    /* buttons */
+  /* classic info line: lemming-under-cursor, OUT, IN, TIME - spread across `w` pixels */
+  drawInfoRow: function (ctx, w, y, hovTxt) {
+    var hud = LM.fonts.hud, f = Math.max(1, w / 320), pct = this.pct();
+    LM.drawText(ctx, hud, hovTxt || '', 0, y);
+    LM.drawText(ctx, hud, 'OUT ' + this.outCount(), Math.round(112 * f), y);
+    LM.drawText(ctx, hud, 'IN ' + (pct < 10 ? '0' : '') + pct + '%', Math.round(184 * f), y);
+    LM.drawText(ctx, hud, 'TIME ' + this.timeStr(), Math.round(248 * f), y);
+  },
+  /* two-line HUD band for the narrow touch layouts (32 rows) */
+  drawInfoCompact: function (ctx, w) {
+    var hud = LM.fonts.hud, pct = this.pct(), t = 'TIME ' + this.timeStr(), s = this.selText();
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, w, 32);
+    LM.drawText(ctx, hud, 'OUT ' + this.outCount(), 3, 1);
+    LM.drawText(ctx, hud, t, w - 3 - t.length * 8, 1);
+    LM.drawText(ctx, hud, 'IN ' + (pct < 10 ? '0' : '') + pct + '%', 3, 17);
+    LM.drawText(ctx, hud, s, w - 3 - s.length * 8, 17);
+  },
+
+  drawButton: function (ctx, i, x, y, w, h) {
     var names = ['rrminus', 'rrplus'].concat(LM.SKILLS).concat(['pause', 'nuke']);
-    for (i = 0; i < 12; i++) {
-      x = i * 16;
-      ctx.fillStyle = '#7a3c30'; ctx.fillRect(x, 176, 16, 24);
-      ctx.fillStyle = '#c88068'; ctx.fillRect(x, 176, 16, 1); ctx.fillRect(x, 176, 1, 24);
-      ctx.fillStyle = '#3a1810'; ctx.fillRect(x, 199, 16, 1); ctx.fillRect(x + 15, 176, 1, 24);
-      if (i < 10) {
-        ctx.fillStyle = '#d4d4de'; ctx.fillRect(x + 1, 177, 14, 7);
-        var val = i === 0 ? this.minRate : i === 1 ? this.rate : this.skills[LM.SKILLS[i - 2]];
-        var s = (i >= 2 && val === 0) ? '' : String(val);
-        if (s.length === 1) s = ' ' + s;
-        if (s) LM.drawDigits(ctx, s, x + 2, 178, '#101018', 2);
-        ctx.drawImage(LM.ICON[names[i]], x, 184);
-      } else {
-        ctx.drawImage(LM.ICON[names[i]], x, 180);
-      }
+    ctx.fillStyle = '#7a3c30'; ctx.fillRect(x, y, w, h);
+    ctx.fillStyle = '#c88068'; ctx.fillRect(x, y, w, 1); ctx.fillRect(x, y, 1, h);
+    ctx.fillStyle = '#3a1810'; ctx.fillRect(x, y + h - 1, w, 1); ctx.fillRect(x + w - 1, y, 1, h);
+    if (i < 10) {
+      ctx.fillStyle = '#d4d4de'; ctx.fillRect(x + 1, y + 1, 14, 7);
+      var val = i === 0 ? this.minRate : i === 1 ? this.rate : this.skills[LM.SKILLS[i - 2]];
+      var s = (i >= 2 && val === 0) ? '' : String(val);
+      if (s.length === 1) s = ' ' + s;
+      if (s) LM.drawDigits(ctx, s, x + 2, y + 2, '#101018', 2);
+      ctx.drawImage(LM.ICON[names[i]], x, y + 8 + Math.floor((h - 8 - 16) / 2));
+    } else {
+      ctx.drawImage(LM.ICON[names[i]], x, y + Math.floor((h - 16) / 2));
     }
-    /* selected skill / pressed buttons */
-    var si = LM.SKILLS.indexOf(this.sel);
-    ctx.strokeStyle = '#f8e820'; ctx.lineWidth = 1; ctx.strokeRect((si + 2) * 16 + 0.5, 176.5, 15, 23);
-    if (this.paused) ctx.strokeRect(10 * 16 + 0.5, 176.5, 15, 23);
-    if (this.nuked || this.nukeArm > 0) { ctx.strokeStyle = this.nuked ? '#f8e820' : '#ffffff'; ctx.strokeRect(11 * 16 + 0.5, 176.5, 15, 23); }
-    /* minimap */
-    ctx.fillStyle = '#c0383c';
-    ctx.beginPath(); ctx.moveTo(193, 188); ctx.lineTo(201, 181); ctx.lineTo(201, 195); ctx.fill();
-    ctx.beginPath(); ctx.moveTo(318, 188); ctx.lineTo(310, 181); ctx.lineTo(310, 195); ctx.fill();
-    ctx.fillStyle = '#7a3c30'; ctx.fillRect(204, 176, 104, 24);
-    ctx.fillStyle = '#050508'; ctx.fillRect(205, 177, 102, 22);
-    var mw = this.mini.width, ox = 206 + Math.floor((100 - mw) / 2);
-    ctx.drawImage(this.mini, ox, 178);
-    ctx.fillStyle = '#f0f8f0';
-    for (i = 0; i < this.lems.length; i++) {
-      var Lm = this.lems[i]; if (Lm.st >= ST.SPLAT) continue;
-      ctx.fillRect(ox + Math.floor(Lm.x / 16), 178 + Math.min(19, Math.floor(Lm.y / 8)), 1, 1);
-    }
-    ctx.strokeStyle = '#a8f8a8'; ctx.strokeRect(ox + Math.floor(this.scrollX / 16) + 0.5, 178.5, 19, 19);
+  },
+  /* the classic panel: info line on top, 12 buttons, minimap on the right.  Any size >= 320 wide, >= 40 tall. */
+  drawPanelCanvas: function (ctx, PW, PH, hovTxt) {
+    var bh = PH - 16, i;
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, PW, PH);
+    this.drawInfoRow(ctx, PW, 1, hovTxt);
+    for (i = 0; i < 12; i++) this.drawButton(ctx, i, i * 16, 16, 16, bh);
+    ctx.strokeStyle = '#f8e820'; ctx.lineWidth = 1;
+    ctx.strokeRect((LM.SKILLS.indexOf(this.sel) + 2) * 16 + 0.5, 16.5, 15, bh - 1);
+    if (this.paused) ctx.strokeRect(10 * 16 + 0.5, 16.5, 15, bh - 1);
+    if (this.nuked || this.nukeArm > 0) { ctx.strokeStyle = this.nuked ? '#f8e820' : '#ffffff'; ctx.strokeRect(11 * 16 + 0.5, 16.5, 15, bh - 1); }
+    this.drawMiniWidget(ctx, 192, 16, PW - 192, bh);
   },
 
   /* scaled-down picture of the whole level (intro screen) */

@@ -446,6 +446,24 @@ LM.makeIcons = function () {
   g.fillStyle = '#fff8b0'; g.fillRect(6, 3, 3, 2);
   g.fillStyle = '#e02010'; g.fillRect(7, 8, 2, 8); g.fillRect(4, 14, 8, 2);
   LM.ICON.nuke = c;
+  /* extra icons used by the touch panel */
+  r = base(); c = r[0]; g = r[1];                                   /* pause: two bars */
+  g.fillStyle = '#7a4a34'; g.fillRect(0, 0, 16, 16);
+  g.fillStyle = '#a89878'; g.fillRect(4, 3, 4, 10); g.fillRect(9, 3, 4, 10);
+  g.fillStyle = '#f8f0e0'; g.fillRect(3, 3, 3, 10); g.fillRect(8, 3, 3, 10);
+  LM.ICON.pausebars = c;
+  r = base(); c = r[0]; g = r[1];                                   /* fast-forward: two triangles */
+  g.fillStyle = '#c89c00';
+  for (i = 0; i < 6; i++) { g.fillRect(3 + i, 8 - (6 - i) + 1, 1, (6 - i) * 2); g.fillRect(9 + i, 8 - (6 - i) + 1, 1, (6 - i) * 2); }
+  g.fillStyle = '#f8e020';
+  for (i = 0; i < 6; i++) { g.fillRect(2 + i, 8 - (6 - i), 1, (6 - i) * 2); g.fillRect(8 + i, 8 - (6 - i), 1, (6 - i) * 2); }
+  LM.ICON.ff = c;
+  r = base(); c = r[0]; g = r[1];                                   /* quit: red cross */
+  g.fillStyle = '#7a1c10';
+  for (i = 0; i < 10; i++) { g.fillRect(3 + i, 4 + i, 3, 1); g.fillRect(12 - i, 4 + i, 3, 1); }
+  g.fillStyle = '#f04828';
+  for (i = 0; i < 10; i++) { g.fillRect(2 + i, 3 + i, 2, 1); g.fillRect(12 - i, 3 + i, 2, 1); }
+  LM.ICON.quit = c;
 };
 
 /* ============================================================
@@ -460,6 +478,12 @@ LM.makeCursors = function () {
   var b = LM.mk(15, 15); g = b.getContext('2d'); g.fillStyle = '#20e020';
   for (var i = 0; i < 15; i++) if (i % 4 < 2) { g.fillRect(i, 0, 1, 1); g.fillRect(i, 14, 1, 1); g.fillRect(0, i, 1, 1); g.fillRect(14, i, 1, 1); }
   LM.curBox = b;
+};
+/* turn a small canvas into a CSS cursor value (scaled up, nearest-neighbour) */
+LM.cursorCSS = function (src, scale, hx, hy, fallback) {
+  var c = LM.mk(src.width * scale, src.height * scale), g = c.getContext('2d');
+  g.imageSmoothingEnabled = false; g.drawImage(src, 0, 0, c.width, c.height);
+  return 'url(' + c.toDataURL() + ') ' + (hx * scale) + ' ' + (hy * scale) + ', ' + fallback;
 };
 
 /* ============================================================
