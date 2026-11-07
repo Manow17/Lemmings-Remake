@@ -4,7 +4,7 @@ A browser recreation of the classic 1991 Lemmings, styled after Amiga screenshot
 320x200 lo-res screen, the green HUD font, the icon panel with minimap, tilesets,
 title signposts, level-intro and results screens.
 
-**To play:** double-click `index.html`. No install, server or internet needed.
+**To play:** Open the link in the about section.
 
 Every sprite, texture and sound is generated in code. Nothing is ripped from the
 original game, and the level layouts are original (the first five use the original
